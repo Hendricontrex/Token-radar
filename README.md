@@ -1,13 +1,14 @@
-# Token Radar — which protocol without a token would be worth the most if it launched one?
+# token-radar
 
-A [make.fun](https://make.fun) bounty entry (`token-radar-01`): a token launch radar built from a
-sealed snapshot of every protocol DefiLlama tracks. It finds the protocols that still record no token,
-ranks them by an implied value, and shows a reader how to farm each one.
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/Hendricontrex/Token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/Hendricontrex/Token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
+A token launch radar: every protocol with no token on record, ranked by what its launch would be worth, with a farm plan for each. Built from a sealed snapshot of every protocol DefiLlama tracks, for the make.fun "Build the best token launch radar" bounty ($1,325 in USDC).
 
 ## What it does
 
-`main.ts` (Node 22, standard library only) reads the sealed snapshot, scores every pre-token protocol
-with the model in `lib/model.ts`, and writes:
+`main.ts` (Node 22, standard library only) reads the sealed snapshot, scores every pre-token protocol with the model in `lib/model.ts`, and writes:
 
 - `board.json` — the ranked board (200 rows: the 40-protocol watchlist plus 160 early rows below it)
 - `data.js` — the same board for the dashboard
@@ -25,17 +26,13 @@ implied = round( tvl_usd x baseMultiple x categoryFactor x chainFactor
                  x (0.6 + min(age_days, 1095) / 1095 x 0.4) )
 ```
 
-- **baseMultiple** — the median FDV/TVL of the snapshot's own live-token protocols (0.1689 here).
-  A median, so one outlier cannot move it.
-- **categoryFactor** — the protocol's sector median FDV/TVL over the global median, clamped to
-  [0.70, 1.30]; 1.00 when its sector has fewer than 3 live-token protocols. Bridges trade rich,
-  stakers trade cheap; the market prices sectors differently, and the factor carries that.
+- **baseMultiple** — the median FDV/TVL of the snapshot's own live-token protocols (0.1689 here). A median, so one outlier cannot move it.
+- **categoryFactor** — the protocol's sector median FDV/TVL over the global median, clamped to [0.70, 1.30]; 1.00 when its sector has fewer than 3 live-token protocols. Bridges trade rich, stakers trade cheap; the market prices sectors differently, and the factor carries that.
 - **chainFactor** — +2% per chain beyond the first, to +10%.
 - **growth** — seven-day TVL change, clamped, half-weighted.
 - **maturity** — how long the protocol has run with no token (age unknown: 365 days).
 
-Live-token protocols are set aside with their market caps shown, never mixed into the ranking.
-Each row carries a six-step farm plan (action, cost, time) derived from the protocol's own record.
+Live-token protocols are set aside with their market caps shown, never mixed into the ranking. Each row carries a six-step farm plan (action, cost, time) derived from the protocol's own record.
 
 ## Run it
 
@@ -49,3 +46,7 @@ Then open `out/dashboard/index.html`. No build step, no install, no network.
 ## License
 
 MIT. See `LICENSE`.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
