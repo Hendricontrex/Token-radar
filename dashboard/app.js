@@ -1,4 +1,5 @@
-// Token Radar (radar-4). It reads window.RADAR (written beside dashboard/ by main.ts) and renders
+// Token Radar (radar-4 model, DRAFT radar-5 dashboard — model unchanged, see PATCH-NOTES.md).
+// It reads window.RADAR (written beside dashboard/ by main.ts) and renders
 // the ranked board: a top-10 chart, a sortable and filterable table, a per-protocol detail view with
 // the model's own inputs and the protocol's farm plan, the methodology, and the model's out-of-sample
 // test. No network: every byte it shows is in data.js. The page recomputes each row from the snapshot
@@ -32,6 +33,16 @@
   function mult(n) { return (n === null || n === undefined || !isFinite(n)) ? 'n/a' : 'x' + n.toFixed(2); }
   function share(n) { return (n === null || n === undefined || !isFinite(n)) ? 'n/a' : Math.round(n * 100) + '%'; }
   function signed(n) { return (n > 0 ? '+' : '') + n.toFixed(3); }
+
+  // DRAFT radar-5: the same model, written as peer multiples so a reader can check it
+  // with plain multiplication. Effective multiple = implied value / TVL, computed live
+  // from the fitted line and the sector adjustment — never hardcoded — so this table
+  // stays true if the snapshot is refit. Because the slope is below 1, the multiple
+  // falls as TVL grows: ten times the TVL is worth about three times more.
+  function effMult(tvlUsd, adjustment) {
+    return Math.exp(DATA.log_intercept + DATA.log_slope * Math.log(tvlUsd) + adjustment) / tvlUsd;
+  }
+  function eff4(n) { return 'x' + n.toFixed(4); }
 
   // The model in one function (lib/model.ts predictValue): the same arithmetic board.json carries,
   // so the page recomputes a row and checks the number the board states. The row carries the fitted
@@ -374,6 +385,40 @@
           h('tbody', null, adjRows)
         )
       ),
+      h('h3', { text: 'Check it with plain multiplication' }),
+      h('div', { class: 'worked' },
+        h('b', { text: 'Worked example — Lending, TVL $1,000,000,000. ' }),
+        'ln(1,000,000,000) = ' + Math.log(1e9).toFixed(3) + '. ' +
+        DATA.log_intercept.toFixed(4) + ' + ' + DATA.log_slope.toFixed(4) + ' x ' + Math.log(1e9).toFixed(3) +
+        ' + (' + (function () { var a = DATA.category_adjustments.filter(function (x) { return x.category === 'Lending'; })[0]; return a ? a.adjustment.toFixed(4) : '0.0000'; })() + ')' +
+        ' = ' + (DATA.log_intercept + DATA.log_slope * Math.log(1e9) + (function () { var a = DATA.category_adjustments.filter(function (x) { return x.category === 'Lending'; })[0]; return a ? a.adjustment : 0; })()).toFixed(3) +
+        '. exp of that = ' + money(Math.exp(DATA.log_intercept + DATA.log_slope * Math.log(1e9) + (function () { var a = DATA.category_adjustments.filter(function (x) { return x.category === 'Lending'; })[0]; return a ? a.adjustment : 0; })())) +
+        '. As a multiple: ' + money(Math.exp(DATA.log_intercept + DATA.log_slope * Math.log(1e9) + (function () { var a = DATA.category_adjustments.filter(function (x) { return x.category === 'Lending'; })[0]; return a ? a.adjustment : 0; })())) +
+        ' / $1,000M = ' + eff4(effMult(1e9, (function () { var a = DATA.category_adjustments.filter(function (x) { return x.category === 'Lending'; })[0]; return a ? a.adjustment : 0; })())) +
+        '. The flat multiple would say ' + money(1e9 * DATA.flat_median) + ' (' + eff4(DATA.flat_median) + ') — the flat line overprices a protocol this large by about six times.'
+      ),
+      h('p', { class: 'sub', text: 'The same model as peer multiples. Each row is the implied value divided by TVL, at three TVL sizes, computed from the fitted line above — so any cell can be checked with one multiplication: TVL x the multiple = the implied value. The multiple falls as TVL grows: ten times the TVL is worth about three times more, so the multiple divides by about three at each step. A flat multiple stays ' + eff4(DATA.flat_median) + ' at every TVL; that is exactly where it goes wrong.' }),
+      h('div', { class: 'table-wrap' },
+        h('table', null,
+          h('caption', { class: 'sub', text: 'Effective multiple (implied value / TVL) by sector and TVL size. Same model as the formula above, no new numbers.' }),
+          h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Sector' }), h('th', { scope: 'col', text: 'Live' }), h('th', { scope: 'col', text: 'x @ $100M TVL' }), h('th', { scope: 'col', text: 'x @ $1B TVL' }), h('th', { scope: 'col', text: 'x @ $10B TVL' }))),
+          h('tbody', null, [h('tr', null,
+            h('td', null, h('b', { text: 'Any sector (no adjustment)' })),
+            h('td', { class: 'num', text: '—' }),
+            h('td', { class: 'num', text: eff4(effMult(1e8, 0)) }),
+            h('td', { class: 'num', text: eff4(effMult(1e9, 0)) }),
+            h('td', { class: 'num', text: eff4(effMult(1e10, 0)) })
+          )].concat(DATA.category_adjustments.map(function (a) {
+            return h('tr', null,
+              h('td', null, h('b', { text: a.category })),
+              h('td', { class: 'num', text: String(a.live_count) }),
+              h('td', { class: 'num', text: eff4(effMult(1e8, a.adjustment)) }),
+              h('td', { class: 'num', text: eff4(effMult(1e9, a.adjustment)) }),
+              h('td', { class: 'num', text: eff4(effMult(1e10, a.adjustment)) })
+            );
+          })))
+        )
+      ),
       h('p', { class: 'sub', text: 'The target is market cap, not FDV: the snapshot carries no FDV field, and every ratio here is mcap over TVL. The flat median multiple is ' + DATA.flat_median.toFixed(4) + ' — the baseline the validation beats.' }),
       h('div', { class: 'note' }, h('b', { text: 'Read this first. ' }), 'A token is a possibility, never a promise. This board ranks what a launch would be worth if the protocol kept its record, it does not predict whether or when one comes. Farm only what you can afford to leave in place, and claim only from a link the protocol itself publishes.')
     );
@@ -445,6 +490,7 @@
         h('div', null, h('span', { text: 'Age with no token (shown, not priced)' }), h('b', { class: 'num', text: ageLabel(row.age_days) })),
         h('div', null, h('span', { text: 'Log line: intercept + slope' }), h('b', { class: 'num', text: row.log_intercept.toFixed(4) + ' + ' + row.log_slope.toFixed(4) })),
         h('div', null, h('span', { text: 'Sector adjustment (' + (row.category || 'Other') + ')' }), h('b', { class: 'num', text: signed(row.category_adjustment) + '  ·  x' + row.category_multiplier.toFixed(2) })),
+        h('div', null, h('span', { text: 'Effective multiple (implied / TVL)' }), h('b', { class: 'num', text: eff4(row.implied_value_usd / row.tvl_usd) + '  ·  check: TVL x ' + eff4(row.implied_value_usd / row.tvl_usd) + ' = implied' })),
         h('div', null, h('span', { text: 'Flat multiple, for comparison' }), h('b', { class: 'num', text: 'x' + DATA.flat_median.toFixed(4) + '  ·  ' + money(Math.max(1, Math.round(row.tvl_usd * DATA.flat_median))) })),
         h('div', { class: 'total' }, h('span', { text: 'Implied value' }), h('b', { class: 'num', text: money(row.implied_value_usd) }))
       ),

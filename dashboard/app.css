@@ -113,6 +113,10 @@ td .name .sub { display: block; margin-top: 1px; }
 /* method + validation panels */
 .model { padding: 22px 24px; margin-top: 16px; }
 .model h2, .valid h2 { margin: 0 0 6px; font-family: Georgia, "Times New Roman", serif; font-size: 20px; }
+.model h3 { margin: 18px 0 8px; font-family: Georgia, "Times New Roman", serif; font-size: 16px; }
+.model .table-wrap { margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.worked { background: var(--paper); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: 13px 15px; margin-bottom: 12px; font-size: 14px; line-height: 1.65; }
+.worked b { color: var(--accent); }
 .model p, .valid p { margin: 0 0 12px; }
 .formula { background: var(--paper); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: 13px 15px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; margin-bottom: 12px; }
 .model-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
