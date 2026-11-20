@@ -1,16 +1,16 @@
-// Token Radar (radar-3). It reads window.RADAR (written beside dashboard/ by main.ts) and renders
+// Token Radar (radar-4). It reads window.RADAR (written beside dashboard/ by main.ts) and renders
 // the ranked board: a top-10 chart, a sortable and filterable table, a per-protocol detail view with
 // the model's own inputs and the protocol's farm plan, the methodology, and the model's out-of-sample
 // test. No network: every byte it shows is in data.js. The page recomputes each row from the snapshot
-// figures, so the code and the board's data are visibly the same arithmetic, and it recomputes the
-// farm plan from the same rules main.ts writes to board.json.
+// figures, so the code and the board's data are visibly the same arithmetic, and it rebuilds the farm
+// plan from the same rules main.ts writes to board.json.
 (function () {
   'use strict';
 
   var DATA = window.RADAR;
   if (!DATA) return;
   var root = document.getElementById('board');
-  var view = { q: '', category: 'all', chain: 'all', scope: 'all', tab: 'pre-token', sort: 'implied', dir: -1, picked: null };
+  var view = { q: '', category: 'all', chain: 'all', scope: 'all', tab: 'pre-token', sort: 'implied', dir: -1, picked: null, section: '' };
 
   var moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function money(n) {
@@ -31,12 +31,13 @@
   }
   function mult(n) { return (n === null || n === undefined || !isFinite(n)) ? 'n/a' : 'x' + n.toFixed(2); }
   function share(n) { return (n === null || n === undefined || !isFinite(n)) ? 'n/a' : Math.round(n * 100) + '%'; }
+  function signed(n) { return (n > 0 ? '+' : '') + n.toFixed(3); }
 
-  // The model in one function (lib/model.ts scoreProtocol): the same factors board.json carries, so
-  // the page recomputes a row and checks the number the board states. main.ts flattens the
-  // model factors onto the data.js row, so the recompute reads them straight off the row.
+  // The model in one function (lib/model.ts predictValue): the same arithmetic board.json carries,
+  // so the page recomputes a row and checks the number the board states. The row carries the fitted
+  // line at full precision, so the recompute lands on the board's number exactly.
   function recompute(row) {
-    return Math.max(1, Math.round(row.tvl_usd * DATA.base_multiple * row.category_factor * row.chain_factor * row.growth_multiplier * row.maturity_multiplier));
+    return Math.max(1, Math.round(Math.exp(row.log_intercept + row.log_slope * Math.log(row.tvl_usd) + row.category_adjustment)));
   }
 
   function h(tag, attrs) {
@@ -62,7 +63,7 @@
 
   // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and age
   // decide the action, the capital, the hold and every cost and time. No name is special-cased.
-  function walletChain(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
+  function firstChain(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
   function stakeSize(p) {
     if (p.tvl_usd >= 5e9) return 250;
     if (p.tvl_usd >= 1e9) return 150;
@@ -75,28 +76,29 @@
     if (age < 365) return 45;
     return 30;
   }
-  function riskLine(p, age) {
+  function cautionLine(p, age) {
     var g = p.change_7d;
-    if (g !== null && g !== undefined && g < -15) return 'TVL fell ' + Math.abs(g).toFixed(1) + '% in seven days, so size the position small and add only if the outflow stops.';
-    if (g !== null && g !== undefined && g > 8) return 'TVL rose ' + g.toFixed(1) + '% in seven days, so the crowd is already arriving; enter in two halves, not one.';
-    if (age !== null && age !== undefined && age < 120) return 'It has run under four months with no token, so treat it as early: small size, and re-check it monthly.';
-    if (p.tvl_usd < 6e7) return 'It sits just above the watchlist floor, so a single whale leaving moves its TVL; keep the position modest.';
+    if (g !== null && g !== undefined && g < -15) return 'TVL dropped ' + Math.abs(g).toFixed(1) + '% in seven days, so start half-size and add only once the outflow has stopped for a week.';
+    if (g !== null && g !== undefined && g > 8) return 'TVL jumped ' + g.toFixed(1) + '% in seven days, so the crowd is already piling in; split the entry in two rather than chasing it at once.';
+    if (age !== null && age !== undefined && age < 120) return 'It has been listed under four months with no token, so treat it as early: keep the size small and re-check it every month.';
+    if (p.tvl_usd < 6e7) return 'It sits just above the watchlist floor, so one large wallet leaving moves its TVL; keep the position modest.';
     return 'It is large enough that one wallet leaving will not move it, but a token is still only a possibility, never a promise.';
   }
   function actionLine(p, capital, chain) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
-    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
-    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
-    if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
-    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
-    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
-    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Lend $' + capital + ' of USDC on ' + name + ' on ' + chain + ' and leave the position open.';
+    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Add $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and leave it in place.';
+    if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC onto ' + chain + ' through ' + name + ', then use the bridged funds inside its app.';
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt token.';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Post $' + capital + ' of USDC as margin on ' + name + ' and open one small hedged position.';
+    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and take one position in a ' + name + ' market.';
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0 || c.indexOf('vault') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and hold the shares.';
     if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
-    if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
-    if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
-    return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
+    if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield-bearing asset on " + chain + ' and hold it.';
+    if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy active.';
+    if (c.indexOf('basis') >= 0) return 'Deposit $' + capital + " into " + name + "'s basis vault on " + chain + ' and hold the position.';
+    return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and leave the position open.';
   }
   function stepLine(step) {
     var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.';
@@ -105,18 +107,18 @@
     return s;
   }
   function planFor(p) {
-    var chain = walletChain(p);
+    var chain = firstChain(p);
     var capital = stakeSize(p);
     var hold = holdFor(p.age_days);
     var weeks = Math.max(1, Math.ceil(hold / 7));
     var gas = 2;
     return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
+      { text: 'Set up a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionLine(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $' + gas + ' of gas a week, about $' + (gas * weeks) + ' across the ' + hold + '-day hold', time: '10 minutes a week' },
-      { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
+      { text: 'Do one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $' + gas + ' of gas a week, about $' + (gas * weeks) + ' across the ' + hold + '-day hold', time: '10 minutes a week' },
+      { text: 'Keep the position open for at least ' + hold + ' days so the activity lands in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: riskLine(p, p.age_days), cost: 'nothing but attention', time: '5 minutes' }
+      { text: cautionLine(p, p.age_days), cost: 'nothing but attention', time: '5 minutes' }
     ].map(stepLine);
   }
 
@@ -129,6 +131,7 @@
     if (params.get('category')) view.category = params.get('category');
     if (params.get('chain')) view.chain = params.get('chain');
     if (params.get('scope')) view.scope = params.get('scope');
+    if (params.get('section')) view.section = params.get('section');
   }
   function writeState() {
     var params = new URLSearchParams();
@@ -137,6 +140,7 @@
     if (view.chain !== 'all') params.set('chain', view.chain);
     if (view.scope !== 'all') params.set('scope', view.scope);
     if (view.picked) params.set('p', view.picked);
+    if (view.section) params.set('section', view.section);
     var next = params.toString();
     if (next) window.history.replaceState(null, '', '#' + next);
     else window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -192,7 +196,7 @@
     var top = DATA.rows[0];
     return h('section', { class: 'lede' },
       h('h1', null, 'Which protocol without a token would be worth the most ', h('em', { text: 'if it launched one?' })),
-      h('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise.' }),
+      h('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor, and the model prices each one from the live market, not from a hunch. Implied value is a model, not a promise.' }),
       h('div', { class: 'facts' },
         h('div', { class: 'fact' }, h('span', { text: 'Watchlist covered' }), h('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size }), h('small', { text: 'every slug, none missed' })),
         h('div', { class: 'fact' }, h('span', { text: 'Pre-token rows scored' }), h('b', { text: String(DATA.board_size) }), h('small', { text: DATA.early_size + ' early rows below the floor' })),
@@ -203,7 +207,8 @@
   }
 
   function topTen() {
-    var top = DATA.rows.slice(0, 10);
+    // The chart follows the current filter, so a filtered view charts what it shows.
+    var top = orderedRows(visibleRows()).slice(0, 10);
     var max = top.length ? top[0].implied_value_usd : 1;
     var wrap = h('section', { class: 'chart' },
       h('h2', { text: 'Top 10 by implied value' }),
@@ -222,7 +227,7 @@
   function filters() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
-    var search = h('input', { type: 'search', id: 'q', placeholder: 'Search name, category or chain', value: view.q, 'aria-label': 'Search the board' });
+    var search = h('input', { type: 'search', id: 'q', placeholder: 'Search name or category', value: view.q, 'aria-label': 'Search the board' });
     search.addEventListener('input', function () { view.q = search.value; writeState(); draw(); });
     var catSel = h('select', { id: 'category', 'aria-label': 'Filter by category' },
       h('option', { value: 'all', text: 'All categories' }),
@@ -342,18 +347,34 @@
 
   function method() {
     var m = DATA.model;
-    return h('section', { class: 'panel model' },
+    var adjRows = DATA.category_adjustments.map(function (a) {
+      return h('tr', null,
+        h('td', null, h('b', { text: a.category })),
+        h('td', { class: 'num', text: String(a.live_count) }),
+        h('td', { class: 'num', text: signed(a.adjustment) }),
+        h('td', { class: 'num', text: mult(a.multiplier) })
+      );
+    });
+    return h('section', { class: 'panel model', id: 'method' },
       h('h2', { text: 'How implied value is computed' }),
-      h('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
+      h('p', { class: 'sub', text: 'One function of the snapshot figures, fit on the live market in this same snapshot. No protocol name is special-cased, and no row is hand-picked.' }),
       h('div', { class: 'formula' },
-        'implied = round( tvl_usd x ' + DATA.base_multiple.toFixed(4) + ' x category_factor x chain_factor x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = round( exp( ' + DATA.log_intercept.toFixed(4) + ' + ' + DATA.log_slope.toFixed(4) + ' x ln(tvl_usd) + sector_adjustment ) )'
       ),
       h('div', { class: 'model-grid' },
-        h('div', { class: 'model-cell' }, h('b', { text: 'Base multiple: ' + DATA.base_multiple.toFixed(4) }), h('span', { text: 'The median FDV/TVL of the ' + DATA.market_live_count + ' live-token protocols in this same snapshot that trade above $0. A median, so one outlier cannot move it.' })),
-        h('div', { class: 'model-cell' }, h('b', { text: 'Category factor: 0.70 to 1.30' }), h('span', { text: 'A sector median over the global median, clamped. Bridges trade rich, stakers trade cheap; the market prices sectors differently, and the factor carries that.' })),
-        h('div', { class: 'model-cell' }, h('b', { text: 'Chain factor: +2% a chain, to +10%' }), h('span', { text: 'A wider footprint earns a little more. Growth and maturity are the same as the house model: momentum, then how long it has run with no token.' }))
+        h('div', { class: 'model-cell' }, h('b', { text: 'The slope is ' + DATA.log_slope.toFixed(4) + ', not 1' }), h('span', { text: 'Market cap grows slower than TVL: the fitted line on the ' + DATA.market_live_count + ' live-token protocols says a protocol ten times larger is worth about three times more, not ten. A flat multiple overprices the giants and underprices the small.' })),
+        h('div', { class: 'model-cell' }, h('b', { text: 'Sector adjustment, shrunk toward zero' }), h('span', { text: 'Each sector earns its mean log-residual off the line, weighted n / (n + ' + m.shrink_k + '), and only with ' + m.category_min_live + ' or more live protocols. Basis Trading lifts a row by x1.89; Liquid Staking discounts it to x0.53.' })),
+        h('div', { class: 'model-cell' }, h('b', { text: 'Growth, age and chains do not price' }), h('span', { text: 'On this snapshot the three carry about zero out-of-sample signal, and the fitted growth sign is negative — fast TVL growth predicts a lower market cap. They stay on the page for display, not for pricing.' }))
       ),
-      h('p', { class: 'sub', text: 'Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      h('p', { class: 'sub', text: 'The sector adjustments, fitted from this snapshot. A sector the fit never saw, or one with fewer than ' + m.category_min_live + ' live protocols, gets no adjustment: its multiplier is x1.00.' }),
+      h('div', { class: 'table-wrap' },
+        h('table', null,
+          h('caption', { class: 'sub', text: 'Sector adjustments: the log-residual mean, shrunk, and the multiplier it becomes.' }),
+          h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Sector' }), h('th', { scope: 'col', text: 'Live' }), h('th', { scope: 'col', text: 'Adjustment' }), h('th', { scope: 'col', text: 'Multiplier' }))),
+          h('tbody', null, adjRows)
+        )
+      ),
+      h('p', { class: 'sub', text: 'The target is market cap, not FDV: the snapshot carries no FDV field, and every ratio here is mcap over TVL. The flat median multiple is ' + DATA.flat_median.toFixed(4) + ' — the baseline the validation beats.' }),
       h('div', { class: 'note' }, h('b', { text: 'Read this first. ' }), 'A token is a possibility, never a promise. This board ranks what a launch would be worth if the protocol kept its record, it does not predict whether or when one comes. Farm only what you can afford to leave in place, and claim only from a link the protocol itself publishes.')
     );
   }
@@ -362,19 +383,23 @@
     var v = DATA.validation;
     if (!v) return null;
     var hold = v.holdout;
+    var strat = v.stratified;
+    var loco = v.loco.pooled;
     var cells = [
-      h('div', { class: 'valid-cell' }, h('b', { text: 'Holdout median error: ' + hold.median_abs_pct_error.toFixed(1) + '%' }), h('span', { text: 'The model fit on ' + hold.fit_count + ' live protocols, tested on the ' + hold.test_count + ' it never saw. A flat multiple on the same test set misses by ' + hold.baseline_median_abs_pct_error.toFixed(1) + '%.' })),
-      h('div', { class: 'valid-cell' }, h('b', { text: 'Within 2x: ' + share(hold.within_2x_share) + ' (flat: ' + share(hold.baseline_within_2x_share) + ')' }), h('span', { text: 'The share of held-out protocols the model prices within twice or half their real market cap.' })),
-      h('div', { class: 'valid-cell' }, h('b', { text: 'Rank correlation: ' + hold.spearman.toFixed(2) + ' (flat: ' + hold.baseline_spearman.toFixed(2) + ')' }), h('span', { text: 'Spearman between predicted and real value on the holdout. The ranking is the product, not the price — this says how far to trust the order.' })),
-      h('div', { class: 'valid-cell' }, h('b', { text: 'Leave-one-sector-out: ' + v.overall_median_abs_pct_error.toFixed(1) + '% median error, ' + share(v.overall_within_2x_share) + ' within 2x' }), h('span', { text: 'Every sector predicted with no sector factor of its own, exactly as an unseen sector would be. The table below breaks it down by sector.' }))
+      h('div', { class: 'valid-cell' }, h('b', { text: 'Holdout median error: ' + hold.model.median_abs_pct_error.toFixed(1) + '% (flat: ' + hold.flat.median_abs_pct_error.toFixed(1) + '%)' }), h('span', { text: 'Mean over ' + hold.seeds + ' seeded holdouts of ' + hold.test_size + ' live protocols each, fit on the rest. The model misses by less than the flat multiple on every seed on average.' })),
+      h('div', { class: 'valid-cell' }, h('b', { text: 'Within 2x: ' + share(hold.model.within_2x_share) + ' (flat: ' + share(hold.flat.within_2x_share) + ')' }), h('span', { text: 'The share of held-out protocols the model prices within twice or half their real market cap.' })),
+      h('div', { class: 'valid-cell' }, h('b', { text: 'Rank correlation: ' + hold.model.spearman.toFixed(2) + ' (flat: ' + hold.flat.spearman.toFixed(2) + ')' }), h('span', { text: 'Spearman between predicted and real value on the holdout. Here the flat multiple still edges the model, by a hair — the sector adjustment buys point accuracy at a small ranking cost, and the board says so.' })),
+      h('div', { class: 'valid-cell' }, h('b', { text: 'Leave-one-sector-out: ' + loco.model.median_abs_pct_error.toFixed(1) + '% median error, ' + share(loco.model.within_2x_share) + ' within 2x (flat: ' + loco.flat.median_abs_pct_error.toFixed(1) + '%, ' + share(loco.flat.within_2x_share) + ')' }), h('span', { text: 'Every sector predicted with no sector adjustment of its own, exactly as an unseen sector would be. The table below breaks it down by sector.' }))
     ];
     var tbody = h('tbody');
-    v.by_category.forEach(function (c) {
+    v.loco.by_category.forEach(function (c) {
       tbody.appendChild(h('tr', null,
         h('td', null, h('b', { text: c.category })),
         h('td', { class: 'num', text: String(c.n) }),
-        h('td', { class: 'num', text: c.median_abs_pct_error.toFixed(1) + '%' }),
-        h('td', { class: 'num', text: share(c.within_2x_share) })
+        h('td', { class: 'num', text: c.model_median_abs_pct_error.toFixed(1) + '%' }),
+        h('td', { class: 'num', text: share(c.model_within_2x_share) }),
+        h('td', { class: 'num', text: c.flat_median_abs_pct_error.toFixed(1) + '%' }),
+        h('td', { class: 'num', text: share(c.flat_within_2x_share) })
       ));
     });
     return h('section', { class: 'panel valid', id: 'validation' },
@@ -383,8 +408,8 @@
       h('div', { class: 'valid-grid' }, cells),
       h('div', { class: 'table-wrap' },
         h('table', null,
-          h('caption', { class: 'sub', text: 'Leave-one-sector-out: each sector priced with no sector factor of its own.' }),
-          h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Sector' }), h('th', { scope: 'col', text: 'Live' }), h('th', { scope: 'col', text: 'Median error' }), h('th', { scope: 'col', text: 'Within 2x' }))),
+          h('caption', { class: 'sub', text: 'Leave-one-sector-out: each sector priced with no sector adjustment of its own. The stratified split (every 5th live protocol by TVL): model ' + strat.model.median_abs_pct_error.toFixed(1) + '% median error, ' + share(strat.model.within_2x_share) + ' within 2x, rank ' + strat.model.spearman.toFixed(2) + ' — flat ' + strat.flat.median_abs_pct_error.toFixed(1) + '%, ' + share(strat.flat.within_2x_share) + ', rank ' + strat.flat.spearman.toFixed(2) + '.' }),
+          h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Sector' }), h('th', { scope: 'col', text: 'Live' }), h('th', { scope: 'col', text: 'Model error' }), h('th', { scope: 'col', text: 'Model 2x' }), h('th', { scope: 'col', text: 'Flat error' }), h('th', { scope: 'col', text: 'Flat 2x' }))),
           tbody
         )
       ),
@@ -416,13 +441,11 @@
       h('h3', { text: 'Implied value' }),
       h('div', { class: 'equation' },
         h('div', null, h('span', { text: 'TVL' }), h('b', { class: 'num', text: money(row.tvl_usd) })),
-        h('div', null, h('span', { text: 'Seven-day growth' }), h('b', { class: 'num', text: pct(row.change_7d) })),
-        h('div', null, h('span', { text: 'Age with no token' }), h('b', { class: 'num', text: ageLabel(row.age_days) })),
-        h('div', null, h('span', { text: 'Base multiple (market median)' }), h('b', { class: 'num', text: mult(DATA.base_multiple) })),
-        h('div', null, h('span', { text: 'Category factor' }), h('b', { class: 'num', text: mult(row.category_factor) })),
-        h('div', null, h('span', { text: 'Chain factor' }), h('b', { class: 'num', text: mult(row.chain_factor) })),
-        h('div', null, h('span', { text: 'Growth multiplier' }), h('b', { class: 'num', text: mult(row.growth_multiplier) })),
-        h('div', null, h('span', { text: 'Maturity multiplier' }), h('b', { class: 'num', text: mult(row.maturity_multiplier) })),
+        h('div', null, h('span', { text: 'Seven-day growth (shown, not priced)' }), h('b', { class: 'num', text: pct(row.change_7d) })),
+        h('div', null, h('span', { text: 'Age with no token (shown, not priced)' }), h('b', { class: 'num', text: ageLabel(row.age_days) })),
+        h('div', null, h('span', { text: 'Log line: intercept + slope' }), h('b', { class: 'num', text: row.log_intercept.toFixed(4) + ' + ' + row.log_slope.toFixed(4) })),
+        h('div', null, h('span', { text: 'Sector adjustment (' + (row.category || 'Other') + ')' }), h('b', { class: 'num', text: signed(row.category_adjustment) + '  ·  x' + row.category_multiplier.toFixed(2) })),
+        h('div', null, h('span', { text: 'Flat multiple, for comparison' }), h('b', { class: 'num', text: 'x' + DATA.flat_median.toFixed(4) + '  ·  ' + money(Math.max(1, Math.round(row.tvl_usd * DATA.flat_median))) })),
         h('div', { class: 'total' }, h('span', { text: 'Implied value' }), h('b', { class: 'num', text: money(row.implied_value_usd) }))
       ),
       h('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + money(again) + (again === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
@@ -447,7 +470,7 @@
     return h('footer', { class: 'foot' },
       h('p', { text: 'Source: ' + DATA.source + '. Snapshot ' + DATA.as_of + '; the board reads those bytes and nothing else. No network is used by this page.' }),
       h('p', { text: 'Implied value is the entry\u2019s own claim, never one make.fun makes. A protocol with no token may never issue one.' })
-    );
+  );
   }
 
   function draw() {
@@ -467,6 +490,10 @@
     root.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) root.appendChild(dialog);
     if (view.picked) showDetail(view.picked);
+    if (view.section) {
+      var target = document.getElementById(view.section);
+      if (target) target.scrollIntoView();
+    }
   }
 
   readState();
